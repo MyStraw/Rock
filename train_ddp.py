@@ -70,12 +70,13 @@ class LitTimm(pl.LightningModule):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpus",        type=int, default=2)
+    parser.add_argument("--gpus",        type=int, default=1)
     parser.add_argument("--lr",          type=float, default=1e-4)
     parser.add_argument("--epochs",      type=int, default=30)
     parser.add_argument("--img_size",    type=int, default=224)
     parser.add_argument("--batch_size",  type=int, default=128)
-    parser.add_argument("--num_workers", type=int, default=8)
+    parser.add_argument("--num_workers", type=int, default=0)
+    parser.add_argument("--prefetch_factor", type=int, default=None)
     parser.add_argument("--seed",        type=int, default=777)
     args = parser.parse_args()
 
@@ -90,6 +91,7 @@ def main():
         img_size=args.img_size,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
+        prefetch_factor=args.prefetch_factor,
         seed=args.seed,
         mean = (0.38771973, 0.39787053, 0.40713646), # 전역분산
         std = (0.2130759, 0.21581389, 0.22090413),
@@ -131,13 +133,20 @@ def main():
     )
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
 
+    # Window에서는 ddp 방식이 불가함
+    if os.name == "nt":  # Windows
+        # 1GPU → 'auto', 2+GPU → ddp_spawn
+        strategy = 'auto' if args.gpus == 1 else "ddp_spawn"
+    else:  # Linux/macOS
+        strategy = 'auto' if args.gpus == 1 else "ddp"
+
     # 5) Trainer
     trainer = pl.Trainer(
         accelerator="gpu",
         devices=args.gpus,
-        accumulate_grad_batches=2,  # 필요할때 사용 (최종 batch size는 512에 맞추기)
+        accumulate_grad_batches=1,  # 필요할때 사용 (최종 batch size는 512에 맞추기)
         # 최종 batch size = num_gpus * batch_size * accumulate_grad_batches
-        strategy="ddp",
+        strategy=strategy,
         max_epochs=args.epochs,
         precision='16-mixed',    
         callbacks=[ckpt, lr_monitor],
@@ -150,7 +159,7 @@ if __name__ == "__main__":
     main()
 
     # 예시
-    # python train_ddp.py --gpus 2 --epochs 40 --img_size 224 --batch_size 256 --num_workers 10 --seed 777
+    # python train_ddp.py --gpus 1 --epochs 40 --img_size 224 --batch_size 512 --seed 777 --num_workers 4 --prefetch_factor 1
     # python train_ddp.py --gpus 2 --epochs 20 --img_size 448 --batch_size 64 --num_workers 10
     # CUDA_VISIBLE_DEVICES=0 python train_ddp.py --gpus 1 --epochs 30 --img_size 256 --batch_size 128
     # CUDA_VISIBLE_DEVICES=0 python train_ddp.py --gpus 1 --epochs 40 --img_size 224 --num_workers 32 --batch_size 512
